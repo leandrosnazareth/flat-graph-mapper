@@ -1,4 +1,4 @@
-package io.github.flatgraph.engine;
+package com.leandrosnazareth.flatgraph.engine;
 
 /**
  * Defines how the {@link GraphBuildEngine} behaves when a child ID resolves to {@code null}.

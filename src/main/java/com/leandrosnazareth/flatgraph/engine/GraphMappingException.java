@@ -1,4 +1,4 @@
-package io.github.flatgraph.engine;
+package com.leandrosnazareth.flatgraph.engine;
 
 /**
  * Unchecked exception thrown when the graph-building engine encounters a

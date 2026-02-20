@@ -1,4 +1,4 @@
-package io.github.flatgraph.domain;
+package com.leandrosnazareth.flatgraph.domain;
 
 import java.util.Objects;
 

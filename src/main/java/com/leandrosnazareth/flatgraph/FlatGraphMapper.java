@@ -1,7 +1,7 @@
-package io.github.flatgraph;
+package com.leandrosnazareth.flatgraph;
 
-import io.github.flatgraph.engine.GraphBuildEngine;
-import io.github.flatgraph.engine.NullIdStrategy;
+import com.leandrosnazareth.flatgraph.engine.GraphBuildEngine;
+import com.leandrosnazareth.flatgraph.engine.NullIdStrategy;
 
 import java.util.List;
 import java.util.Map;

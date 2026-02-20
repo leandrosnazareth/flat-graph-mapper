@@ -1,8 +1,8 @@
-package io.github.flatgraph.engine;
+package com.leandrosnazareth.flatgraph.engine;
 
-import io.github.flatgraph.metadata.ClassMetadata;
-import io.github.flatgraph.metadata.FieldMapping;
-import io.github.flatgraph.metadata.MetadataExtractor;
+import com.leandrosnazareth.flatgraph.metadata.ClassMetadata;
+import com.leandrosnazareth.flatgraph.metadata.FieldMapping;
+import com.leandrosnazareth.flatgraph.metadata.MetadataExtractor;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.ParameterizedType;

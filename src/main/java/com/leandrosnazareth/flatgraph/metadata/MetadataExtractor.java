@@ -1,7 +1,7 @@
-package io.github.flatgraph.metadata;
+package com.leandrosnazareth.flatgraph.metadata;
 
-import io.github.flatgraph.annotation.ChildField;
-import io.github.flatgraph.annotation.ParentField;
+import com.leandrosnazareth.flatgraph.annotation.ChildField;
+import com.leandrosnazareth.flatgraph.annotation.ParentField;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;

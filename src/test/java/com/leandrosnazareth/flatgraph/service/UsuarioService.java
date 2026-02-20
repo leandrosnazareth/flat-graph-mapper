@@ -1,8 +1,8 @@
-package io.github.flatgraph.service;
+package com.leandrosnazareth.flatgraph.service;
 
-import io.github.flatgraph.FlatGraphMapper;
-import io.github.flatgraph.domain.Usuario;
-import io.github.flatgraph.dto.UsuarioDTO;
+import com.leandrosnazareth.flatgraph.FlatGraphMapper;
+import com.leandrosnazareth.flatgraph.domain.Usuario;
+import com.leandrosnazareth.flatgraph.dto.UsuarioDTO;
 
 import java.util.List;
 import java.util.Optional;

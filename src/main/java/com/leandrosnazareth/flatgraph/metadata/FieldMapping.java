@@ -1,4 +1,4 @@
-package io.github.flatgraph.metadata;
+package com.leandrosnazareth.flatgraph.metadata;
 
 import java.lang.reflect.Field;
 

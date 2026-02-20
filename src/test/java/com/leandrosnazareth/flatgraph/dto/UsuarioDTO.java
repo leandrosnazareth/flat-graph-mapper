@@ -1,10 +1,10 @@
-package io.github.flatgraph.dto;
+package com.leandrosnazareth.flatgraph.dto;
 
-import io.github.flatgraph.annotation.ChildField;
-import io.github.flatgraph.annotation.ParentField;
-import io.github.flatgraph.domain.Permissao;
-import io.github.flatgraph.domain.Role;
-import io.github.flatgraph.domain.Usuario;
+import com.leandrosnazareth.flatgraph.annotation.ChildField;
+import com.leandrosnazareth.flatgraph.annotation.ParentField;
+import com.leandrosnazareth.flatgraph.domain.Permissao;
+import com.leandrosnazareth.flatgraph.domain.Role;
+import com.leandrosnazareth.flatgraph.domain.Usuario;
 
 /**
  * Flat DTO representing a single row from a SQL JOIN of USUARIO → ROLE → PERMISSAO.

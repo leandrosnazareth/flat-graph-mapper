@@ -1,11 +1,11 @@
-package io.github.flatgraph;
+package com.leandrosnazareth.flatgraph;
 
-import io.github.flatgraph.domain.Permissao;
-import io.github.flatgraph.domain.Role;
-import io.github.flatgraph.domain.Usuario;
-import io.github.flatgraph.dto.UsuarioDTO;
-import io.github.flatgraph.engine.GraphMappingException;
-import io.github.flatgraph.engine.NullIdStrategy;
+import com.leandrosnazareth.flatgraph.domain.Permissao;
+import com.leandrosnazareth.flatgraph.domain.Role;
+import com.leandrosnazareth.flatgraph.domain.Usuario;
+import com.leandrosnazareth.flatgraph.dto.UsuarioDTO;
+import com.leandrosnazareth.flatgraph.engine.GraphMappingException;
+import com.leandrosnazareth.flatgraph.engine.NullIdStrategy;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;

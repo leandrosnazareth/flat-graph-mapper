@@ -1,4 +1,4 @@
-package io.github.flatgraph.annotation;
+package com.leandrosnazareth.flatgraph.annotation;
 
 import java.lang.annotation.*;
 
