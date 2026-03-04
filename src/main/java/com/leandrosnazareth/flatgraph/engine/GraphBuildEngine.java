@@ -70,6 +70,12 @@ public final class GraphBuildEngine<D, R> {
      */
     private final Map<String, Field> collectionFieldCache = new HashMap<>();
 
+    /**
+     * Cache: "(parentClass#childClass)" → single-object field on parent.
+     * Used as fallback when no {@code List<childClass>} field is found.
+     */
+    private final Map<String, Field> singleFieldCache = new HashMap<>();
+
     /** Constructs the engine with the default {@link NullIdStrategy#SKIP} strategy. */
     public GraphBuildEngine(Class<D> dtoClass) {
         this(dtoClass, NullIdStrategy.SKIP);
@@ -238,21 +244,36 @@ public final class GraphBuildEngine<D, R> {
     @SuppressWarnings({"unchecked", "rawtypes"})
     private void addToCollection(Object parent, Class<?> childClass, Object child) {
         Field collectionField = resolveCollectionField(parent.getClass(), childClass);
-        if (collectionField == null) return;
+        if (collectionField != null) {
+            try {
+                List list = (List) collectionField.get(parent);
+                if (list == null) {
+                    list = new ArrayList<>();
+                    collectionField.set(parent, list);
+                }
+                if (!list.contains(child)) {
+                    list.add(child);
+                }
+            } catch (IllegalAccessException e) {
+                throw new GraphMappingException(
+                    "Cannot access collection field '" + collectionField.getName()
+                    + "' on " + parent.getClass().getName(), e);
+            }
+            return;
+        }
 
-        try {
-            List list = (List) collectionField.get(parent);
-            if (list == null) {
-                list = new ArrayList<>();
-                collectionField.set(parent, list);
+        // Fallback: try to find a single-object field of type childClass
+        Field singleField = resolveSingleField(parent.getClass(), childClass);
+        if (singleField != null) {
+            try {
+                if (singleField.get(parent) == null) {
+                    singleField.set(parent, child);
+                }
+            } catch (IllegalAccessException e) {
+                throw new GraphMappingException(
+                    "Cannot access single field '" + singleField.getName()
+                    + "' on " + parent.getClass().getName(), e);
             }
-            if (!list.contains(child)) {
-                list.add(child);
-            }
-        } catch (IllegalAccessException e) {
-            throw new GraphMappingException(
-                "Cannot access collection field '" + collectionField.getName()
-                + "' on " + parent.getClass().getName(), e);
         }
     }
 
@@ -286,6 +307,27 @@ public final class GraphBuildEngine<D, R> {
             return args.length == 1 && expected.equals(args[0]);
         }
         return false;
+    }
+
+    /**
+     * Resolves and caches a single-object field of type {@code childClass} on {@code parentClass}.
+     * Used as fallback when no {@code List<childClass>} field exists.
+     */
+    private Field resolveSingleField(Class<?> parentClass, Class<?> childClass) {
+        String cacheKey = parentClass.getName() + "#" + childClass.getName() + "#single";
+        return singleFieldCache.computeIfAbsent(cacheKey, k -> {
+            Class<?> cursor = parentClass;
+            while (cursor != null && cursor != Object.class) {
+                for (Field f : cursor.getDeclaredFields()) {
+                    if (f.getType().equals(childClass)) {
+                        f.setAccessible(true);
+                        return f;
+                    }
+                }
+                cursor = cursor.getSuperclass();
+            }
+            return null;
+        });
     }
 
     // -------------------------------------------------------------------------
