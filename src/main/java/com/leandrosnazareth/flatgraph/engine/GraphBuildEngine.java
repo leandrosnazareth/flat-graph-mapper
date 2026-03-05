@@ -7,6 +7,14 @@ import com.leandrosnazareth.flatgraph.metadata.MetadataExtractor;
 import java.lang.reflect.Field;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.*;
 
 /**
@@ -62,18 +70,27 @@ public final class GraphBuildEngine<D, R> {
     private final ClassMetadata metadata;
     private final NullIdStrategy nullIdStrategy;
 
-    /**
-     * Cache: "(parentClass#childClass)" → List field on parent.
-     * Populated lazily, at most once per pair, and never mutated after that.
-     * Safe for concurrent reads after the first write because Field references
-     * are immutable once setAccessible is called.
-     */
+    /** Candidate formatters tried in order when parsing a String into LocalDate. */
+    private static final List<DateTimeFormatter> LOCAL_DATE_FORMATTERS = List.of(
+        DateTimeFormatter.ISO_LOCAL_DATE,             // 2024-03-05
+        DateTimeFormatter.ofPattern("dd/MM/yyyy"),    // 05/03/2024
+        DateTimeFormatter.ofPattern("dd-MM-yyyy"),    // 05-03-2024
+        DateTimeFormatter.ofPattern("yyyyMMdd")       // 20240305
+    );
+
+    /** Candidate formatters tried in order when parsing a String into LocalDateTime. */
+    private static final List<DateTimeFormatter> LOCAL_DATE_TIME_FORMATTERS = List.of(
+        DateTimeFormatter.ISO_LOCAL_DATE_TIME,                    // 2024-03-05T08:43:31
+        DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss"),       // 05/03/2024 08:43:31
+        DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"),          // 05/03/2024 08:43
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"),       // 2024-03-05 08:43:31
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")           // 2024-03-05 08:43
+    );
+
+    /** Cache: "(parentClass#childClass)" → List field on parent. */
     private final Map<String, Field> collectionFieldCache = new HashMap<>();
 
-    /**
-     * Cache: "(parentClass#childClass)" → single-object field on parent.
-     * Used as fallback when no {@code List<childClass>} field is found.
-     */
+    /** Cache: "(parentClass#childClass#single)" → single-object field on parent. */
     private final Map<String, Field> singleFieldCache = new HashMap<>();
 
     /** Constructs the engine with the default {@link NullIdStrategy#SKIP} strategy. */
@@ -123,7 +140,7 @@ public final class GraphBuildEngine<D, R> {
     }
 
     // -------------------------------------------------------------------------
-    // row processing — single, linear pass with no redundant writes
+    // row processing
     // -------------------------------------------------------------------------
 
     private void processRow(D row,
@@ -331,7 +348,7 @@ public final class GraphBuildEngine<D, R> {
     }
 
     // -------------------------------------------------------------------------
-    // low-level reflection helpers
+    // reflection + type conversion
     // -------------------------------------------------------------------------
 
     private Object readDtoField(D row, Field field) {
@@ -345,7 +362,7 @@ public final class GraphBuildEngine<D, R> {
 
     private void setField(Object instance, Field field, Object value) {
         try {
-            field.set(instance, value);
+            field.set(instance, convertIfNeeded(value, field.getType()));
         } catch (IllegalAccessException e) {
             throw new GraphMappingException(
                 "Cannot set field '" + field.getName() + "' on "
@@ -353,11 +370,81 @@ public final class GraphBuildEngine<D, R> {
         }
     }
 
+    /**
+     * Converts {@code value} to {@code targetType}. Supported conversions:
+     * <ul>
+     *   <li>{@link Calendar} → {@link LocalDate} / {@link LocalDateTime} / {@link Date}</li>
+     *   <li>{@link Date}     → {@link LocalDate} / {@link LocalDateTime}</li>
+     *   <li>{@link String}   → {@link LocalDate}  (ISO, dd/MM/yyyy, dd-MM-yyyy, yyyyMMdd)</li>
+     *   <li>{@link String}   → {@link LocalDateTime} (ISO, dd/MM/yyyy HH:mm:ss, yyyy-MM-dd HH:mm:ss, ...)</li>
+     *   <li>{@link String}   → numeric types: {@code int}, {@code long}, {@code double}, {@code float},
+     *                          {@code short}, {@code byte}, {@code boolean},
+     *                          {@link Integer}, {@link Long}, {@link Double}, {@link Float},
+     *                          {@link Short}, {@link Byte}, {@link Boolean},
+     *                          {@link BigDecimal}, {@link BigInteger}</li>
+     * </ul>
+     */
+    private Object convertIfNeeded(Object value, Class<?> targetType) {
+        if (value == null) return null;
+        if (targetType.isAssignableFrom(value.getClass())) return value;
+
+        if (value instanceof Calendar cal) {
+            ZoneId zone = cal.getTimeZone().toZoneId();
+            if (targetType == LocalDate.class)     return cal.toInstant().atZone(zone).toLocalDate();
+            if (targetType == LocalDateTime.class) return cal.toInstant().atZone(zone).toLocalDateTime();
+            if (targetType == Date.class)          return cal.getTime();
+        }
+
+        if (value instanceof Date date) {
+            if (targetType == LocalDate.class)     return date.toInstant().atZone(ZoneId.systemDefault()).toLocalDate();
+            if (targetType == LocalDateTime.class) return date.toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime();
+        }
+
+        if (value instanceof String s && !s.isBlank()) {
+            // Date/time — tenta primeiro com offset (ex: 2019-12-31T22:00:00.000-02:00)
+            if (targetType == LocalDate.class) {
+                // tenta parsear como OffsetDateTime e extrair a data local
+                try {
+                    return OffsetDateTime.parse(s).toLocalDate();
+                } catch (DateTimeParseException ignored) {}
+                for (DateTimeFormatter fmt : LOCAL_DATE_FORMATTERS) {
+                    try { return LocalDate.parse(s, fmt); } catch (DateTimeParseException ignored) {}
+                }
+            }
+            if (targetType == LocalDateTime.class) {
+                // tenta parsear como OffsetDateTime e converter para LocalDateTime no timezone do sistema
+                try {
+                    return OffsetDateTime.parse(s).atZoneSameInstant(ZoneId.systemDefault()).toLocalDateTime();
+                } catch (DateTimeParseException ignored) {}
+                for (DateTimeFormatter fmt : LOCAL_DATE_TIME_FORMATTERS) {
+                    try { return LocalDateTime.parse(s, fmt); } catch (DateTimeParseException ignored) {}
+                }
+            }
+            // Numeric / boolean
+            try {
+                if (targetType == Integer.class   || targetType == int.class)     return Integer.parseInt(s.trim());
+                if (targetType == Long.class      || targetType == long.class)    return Long.parseLong(s.trim());
+                if (targetType == Double.class    || targetType == double.class)  return Double.parseDouble(s.trim());
+                if (targetType == Float.class     || targetType == float.class)   return Float.parseFloat(s.trim());
+                if (targetType == Short.class     || targetType == short.class)   return Short.parseShort(s.trim());
+                if (targetType == Byte.class      || targetType == byte.class)    return Byte.parseByte(s.trim());
+                if (targetType == Boolean.class   || targetType == boolean.class) return Boolean.parseBoolean(s.trim());
+                if (targetType == BigDecimal.class) return new BigDecimal(s.trim());
+                if (targetType == BigInteger.class) return new BigInteger(s.trim());
+            } catch (NumberFormatException e) {
+                throw new GraphMappingException(
+                    "Cannot convert String value '" + s + "' to " + targetType.getSimpleName(), e);
+            }
+        }
+
+        return value;
+    }
+
     private <T> T newInstance(Class<T> clazz) {
         try {
-            var constructor = clazz.getDeclaredConstructor();
-            constructor.setAccessible(true);
-            return constructor.newInstance();
+            var ctor = clazz.getDeclaredConstructor();
+            ctor.setAccessible(true);
+            return ctor.newInstance();
         } catch (ReflectiveOperationException e) {
             throw new GraphMappingException(
                 "Cannot instantiate '" + clazz.getName()
