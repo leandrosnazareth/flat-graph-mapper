@@ -5,6 +5,7 @@ import com.leandrosnazareth.flatgraph.engine.NullIdStrategy;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -87,5 +88,41 @@ public final class FlatGraphMapper {
             (GraphBuildEngine<D, R>) ENGINE_CACHE.computeIfAbsent(
                 key, k -> new GraphBuildEngine<>(k.dtoClass(), k.strategy()));
         return engine.build(rows);
+    }
+
+    /**
+     * Transforms {@code rows} into a single root object using the default
+     * {@link NullIdStrategy#SKIP} strategy.
+     *
+     * <p>Returns an {@link Optional} containing the first root object, or
+     * {@link Optional#empty()} if the result list is empty.
+     *
+     * @param rows     flat DTO list (may be empty, never null)
+     * @param dtoClass the DTO class carrying {@code @ParentField} / {@code @ChildField} annotations
+     * @param <D>      DTO type
+     * @param <R>      root domain type (inferred automatically)
+     * @return Optional containing the first root object, or empty if no rows
+     */
+    public static <D, R> Optional<R> mapSingle(List<D> rows, Class<D> dtoClass) {
+        return mapSingle(rows, dtoClass, NullIdStrategy.SKIP);
+    }
+
+    /**
+     * Transforms {@code rows} into a single root object using the specified
+     * {@link NullIdStrategy}.
+     *
+     * <p>Returns an {@link Optional} containing the first root object, or
+     * {@link Optional#empty()} if the result list is empty.
+     *
+     * @param rows           flat DTO list (may be empty, never null)
+     * @param dtoClass       the DTO class carrying {@code @ParentField} / {@code @ChildField} annotations
+     * @param nullIdStrategy how to handle rows where a child ID is {@code null}
+     * @param <D>            DTO type
+     * @param <R>            root domain type (inferred automatically)
+     * @return Optional containing the first root object, or empty if no rows
+     */
+    public static <D, R> Optional<R> mapSingle(List<D> rows, Class<D> dtoClass, NullIdStrategy nullIdStrategy) {
+        List<R> results = map(rows, dtoClass, nullIdStrategy);
+        return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
     }
 }
