@@ -11,47 +11,42 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * <h1>FlatGraphMapper — Public API</h1>
  *
- * <p>Entry point for the FlatGraphMapper library. Transforms a flat list of
- * annotated DTOs (typically the result of a SQL JOIN query) into a hierarchical
- * object graph.
+ * <p>Entry point for the FlatGraphMapper library. Transforms flat DTOs
+ * (typically the result of a SQL JOIN query) into hierarchical object graphs.
  *
  * <h2>Usage</h2>
  * <pre>{@code
- * List<UsuarioDTO> rows = jdbcTemplate.query(SQL, new UsuarioDTORowMapper());
- * List<Usuario>    users = FlatGraphMapper.map(rows, UsuarioDTO.class);
+ * // List
+ * List<Usuario> users = FlatGraphMapper.map(rows, UsuarioDTO.class);
+ *
+ * // Single object
+ * Optional<Usuario> user = FlatGraphMapper.mapSingle(dto, UsuarioDTO.class);
  * }</pre>
  *
  * <h2>Thread-safety</h2>
  * <p>{@link GraphBuildEngine} instances are cached per DTO class in a
- * {@link ConcurrentHashMap}.  Each call to {@link #map(List, Class)} uses a
- * <em>fresh local state</em> (the identity maps are local variables), so the
- * same cached engine can be safely used by multiple threads concurrently.
+ * {@link ConcurrentHashMap}. Each call uses fresh local state (identity maps),
+ * so the same cached engine is safe for concurrent use.
  *
  * <h2>Performance notes</h2>
  * <ul>
- *   <li>Annotation scanning and {@code Field#setAccessible} calls are done exactly
- *       once per DTO class, at first use.</li>
+ *   <li>Annotation scanning and {@code Field#setAccessible} calls are done
+ *       exactly once per DTO class, at first use.</li>
  *   <li>For large result sets the dominant cost is object instantiation
- *       ({@code newInstance}) and map lookups — both O(1) per row.</li>
+ *       and map lookups — both O(1) per row.</li>
  * </ul>
  */
 public final class FlatGraphMapper {
 
-    /**
-     * Engine cache key: combines DTO class + NullIdStrategy so that engines with
-     * different strategies are stored and reused independently.
-     */
     private record EngineKey(Class<?> dtoClass, NullIdStrategy strategy) {}
 
-    /** Thread-safe engine cache: one pre-built engine per (dtoClass, strategy) pair. */
-    private static final Map<EngineKey, GraphBuildEngine<?, ?>> ENGINE_CACHE
-            = new ConcurrentHashMap<>();
+    private static final Map<EngineKey, GraphBuildEngine<?, ?>> ENGINE_CACHE = new ConcurrentHashMap<>();
 
     private FlatGraphMapper() {}
 
     /**
-     * Transforms {@code rows} into a hierarchical object graph using the default
-     * {@link NullIdStrategy#SKIP} strategy — rows with a {@code null} child ID are silently ignored.
+     * Transforms a flat DTO list into a hierarchical object graph using the default
+     * {@link NullIdStrategy#SKIP} strategy.
      *
      * @param rows     flat DTO list (may be empty, never null)
      * @param dtoClass the DTO class carrying {@code @ParentField} / {@code @ChildField} annotations
@@ -64,21 +59,21 @@ public final class FlatGraphMapper {
     }
 
     /**
-     * Transforms {@code rows} into a hierarchical object graph using the specified
-     * {@link NullIdStrategy} to control behaviour when a child ID is {@code null}.
+     * Transforms a flat DTO list into a hierarchical object graph using the specified
+     * {@link NullIdStrategy}.
      *
      * <h3>Strategy options</h3>
      * <ul>
-     *   <li>{@link NullIdStrategy#SKIP}          — silently ignore the child row (default)</li>
-     *   <li>{@link NullIdStrategy#THROW}         — fail fast with {@link io.github.flatgraph.engine.GraphMappingException}</li>
-     *   <li>{@link NullIdStrategy#ALLOW_NULL_ID} — create the child with a {@code null} ID</li>
+     *   <li>{@link NullIdStrategy#SKIP}          — silently ignore child rows with null ID (default)</li>
+     *   <li>{@link NullIdStrategy#THROW}         — fail fast with {@link com.leandrosnazareth.flatgraph.engine.GraphMappingException}</li>
+     *   <li>{@link NullIdStrategy#ALLOW_NULL_ID} — create children with null ID</li>
      * </ul>
      *
-     * @param rows        flat DTO list (may be empty, never null)
-     * @param dtoClass    the DTO class carrying {@code @ParentField} / {@code @ChildField} annotations
+     * @param rows           flat DTO list (may be empty, never null)
+     * @param dtoClass       the DTO class carrying {@code @ParentField} / {@code @ChildField} annotations
      * @param nullIdStrategy how to handle rows where a child ID is {@code null}
-     * @param <D>         DTO type
-     * @param <R>         root domain type (inferred automatically)
+     * @param <D>            DTO type
+     * @param <R>            root domain type (inferred automatically)
      * @return ordered list of root objects with fully populated child collections
      */
     @SuppressWarnings("unchecked")
@@ -91,38 +86,77 @@ public final class FlatGraphMapper {
     }
 
     /**
-     * Transforms {@code rows} into a single root object using the default
+     * Transforms a single DTO object into a root domain object using the default
      * {@link NullIdStrategy#SKIP} strategy.
      *
-     * <p>Returns an {@link Optional} containing the first root object, or
-     * {@link Optional#empty()} if the result list is empty.
+     * <p>Returns an {@link Optional} containing the mapped object, or
+     * {@link Optional#empty()} if the input is {@code null}.
      *
-     * @param rows     flat DTO list (may be empty, never null)
+     * @param row      a single flat DTO object (may be null)
      * @param dtoClass the DTO class carrying {@code @ParentField} / {@code @ChildField} annotations
      * @param <D>      DTO type
      * @param <R>      root domain type (inferred automatically)
-     * @return Optional containing the first root object, or empty if no rows
+     * @return Optional containing the mapped root object, or empty if input is null
      */
-    public static <D, R> Optional<R> mapSingle(List<D> rows, Class<D> dtoClass) {
-        return mapSingle(rows, dtoClass, NullIdStrategy.SKIP);
+    public static <D, R> Optional<R> mapSingle(D row, Class<D> dtoClass) {
+        return mapSingle(row, dtoClass, NullIdStrategy.SKIP);
     }
 
     /**
-     * Transforms {@code rows} into a single root object using the specified
+     * Transforms a single DTO object into a root domain object using the specified
      * {@link NullIdStrategy}.
      *
-     * <p>Returns an {@link Optional} containing the first root object, or
-     * {@link Optional#empty()} if the result list is empty.
+     * <p>Returns an {@link Optional} containing the mapped object, or
+     * {@link Optional#empty()} if the input is {@code null}.
      *
-     * @param rows           flat DTO list (may be empty, never null)
+     * @param row            a single flat DTO object (may be null)
      * @param dtoClass       the DTO class carrying {@code @ParentField} / {@code @ChildField} annotations
      * @param nullIdStrategy how to handle rows where a child ID is {@code null}
      * @param <D>            DTO type
      * @param <R>            root domain type (inferred automatically)
-     * @return Optional containing the first root object, or empty if no rows
+     * @return Optional containing the mapped root object, or empty if input is null
      */
-    public static <D, R> Optional<R> mapSingle(List<D> rows, Class<D> dtoClass, NullIdStrategy nullIdStrategy) {
-        List<R> results = map(rows, dtoClass, nullIdStrategy);
+    public static <D, R> Optional<R> mapSingle(D row, Class<D> dtoClass, NullIdStrategy nullIdStrategy) {
+        if (row == null) return Optional.empty();
+        List<R> results = map(List.of(row), dtoClass, nullIdStrategy);
         return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
+    }
+
+    /**
+     * Transforms a single DTO object into a root domain object using the default
+     * {@link NullIdStrategy#SKIP} strategy.
+     *
+     * <p>Returns the mapped object, or {@code null} if the input is {@code null}.
+     * This method is useful when you want to avoid Optional syntax.
+     *
+     * @param row            a single flat DTO object (may be null)
+     * @param dtoClass       the DTO class carrying {@code @ParentField} / {@code @ChildField} annotations
+     * @param resultType     the expected root domain type (required for type inference)
+     * @param <D>            DTO type
+     * @param <R>            root domain type
+     * @return the mapped root object, or null if input is null
+     */
+    public static <D, R> R mapSingleOrNull(D row, Class<D> dtoClass, Class<R> resultType) {
+        return mapSingleOrNull(row, dtoClass, resultType, NullIdStrategy.SKIP);
+    }
+
+    /**
+     * Transforms a single DTO object into a root domain object using the specified
+     * {@link NullIdStrategy}.
+     *
+     * <p>Returns the mapped object, or {@code null} if the input is {@code null}.
+     * This method is useful when you want to avoid Optional syntax.
+     *
+     * @param row            a single flat DTO object (may be null)
+     * @param dtoClass       the DTO class carrying {@code @ParentField} / {@code @ChildField} annotations
+     * @param resultType     the expected root domain type (required for type inference)
+     * @param nullIdStrategy how to handle rows where a child ID is {@code null}
+     * @param <D>            DTO type
+     * @param <R>            root domain type
+     * @return the mapped root object, or null if input is null
+     */
+    public static <D, R> R mapSingleOrNull(D row, Class<D> dtoClass, Class<R> resultType, NullIdStrategy nullIdStrategy) {
+        Optional<R> result = mapSingle(row, dtoClass, nullIdStrategy);
+        return result.orElse(null);
     }
 }
