@@ -131,9 +131,11 @@ public final class GraphBuildEngine<D, R> {
         final Map<Object, R>      rootMap  = new LinkedHashMap<>();
         // child identity map : ChildKey(targetClass, id) → child instance
         final Map<ChildKey, Object> childMap = new LinkedHashMap<>();
+        // attached children tracker: parentInstance -> (childClass -> set(childId))
+        final Map<Object, Map<Class<?>, Set<Object>>> attachedChildren = new IdentityHashMap<>();
 
         for (D row : rows) {
-            processRow(row, rootMap, childMap);
+            processRow(row, rootMap, childMap, attachedChildren);
         }
 
         return new ArrayList<>(rootMap.values());
@@ -145,7 +147,8 @@ public final class GraphBuildEngine<D, R> {
 
     private void processRow(D row,
                              Map<Object, R> rootMap,
-                             Map<ChildKey, Object> childMap) {
+                             Map<ChildKey, Object> childMap,
+                             Map<Object, Map<Class<?>, Set<Object>>> attachedChildren) {
 
         // ── 1. Root ID ──────────────────────────────────────────────────────
         Object rootId = extractId(row, metadata.parentMappings());
@@ -205,7 +208,7 @@ public final class GraphBuildEngine<D, R> {
             Class<?> parentClass = metadata.childMappingsFor(childClass).get(0).parentClass();
             Object   parentInstance = resolveParentInstance(parentClass, root, currentRowChildren);
             if (parentInstance != null) {
-                addToCollection(parentInstance, childClass, child);
+                addToCollection(parentInstance, childClass, child, childId, childIsNew, attachedChildren);
             }
         }
     }
@@ -237,7 +240,26 @@ public final class GraphBuildEngine<D, R> {
      */
     private void setFields(D row, Object target, List<FieldMapping> mappings) {
         for (FieldMapping m : mappings) {
-            setField(target, m.targetField(), readDtoField(row, m.dtoField()));
+            Object raw = readDtoField(row, m.dtoField());
+            setFieldFromMapping(target, m, raw);
+        }
+    }
+
+    private void setFieldFromMapping(Object instance, FieldMapping m, Object rawValue) {
+        Object converted;
+        try {
+            converted = m.converter().apply(rawValue);
+        } catch (RuntimeException e) {
+            throw new GraphMappingException(
+                "Conversion failed for field '" + m.targetField().getName() + "' of "
+                + instance.getClass().getName() + ": " + e.getMessage(), e);
+        }
+        try {
+            m.targetField().set(instance, converted);
+        } catch (IllegalAccessException e) {
+            throw new GraphMappingException(
+                "Cannot set field '" + m.targetField().getName() + "' on "
+                + instance.getClass().getName(), e);
         }
     }
 
@@ -259,7 +281,12 @@ public final class GraphBuildEngine<D, R> {
     // -------------------------------------------------------------------------
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private void addToCollection(Object parent, Class<?> childClass, Object child) {
+    private void addToCollection(Object parent,
+                                 Class<?> childClass,
+                                 Object child,
+                                 Object childId,
+                                 boolean childIsNew,
+                                 Map<Object, Map<Class<?>, Set<Object>>> attachedChildren) {
         Field collectionField = resolveCollectionField(parent.getClass(), childClass);
         if (collectionField != null) {
             try {
@@ -268,8 +295,21 @@ public final class GraphBuildEngine<D, R> {
                     list = new ArrayList<>();
                     collectionField.set(parent, list);
                 }
-                if (!list.contains(child)) {
+
+                if (childIsNew) {
+                    // globally new child -> definitely not attached to any parent
                     list.add(child);
+                    // record attachment
+                    attachedChildren.computeIfAbsent(parent, p -> new HashMap<>())
+                                     .computeIfAbsent(childClass, c -> new HashSet<>())
+                                     .add(childId);
+                } else {
+                    // child existed before; check if already attached to THIS parent
+                    Map<Class<?>, Set<Object>> map = attachedChildren.computeIfAbsent(parent, p -> new HashMap<>());
+                    Set<Object> ids = map.computeIfAbsent(childClass, c -> new HashSet<>());
+                    if (ids.add(childId)) {
+                        list.add(child);
+                    }
                 }
             } catch (IllegalAccessException e) {
                 throw new GraphMappingException(
@@ -285,6 +325,9 @@ public final class GraphBuildEngine<D, R> {
             try {
                 if (singleField.get(parent) == null) {
                     singleField.set(parent, child);
+                    attachedChildren.computeIfAbsent(parent, p -> new HashMap<>())
+                                     .computeIfAbsent(childClass, c -> new HashSet<>())
+                                     .add(childId);
                 }
             } catch (IllegalAccessException e) {
                 throw new GraphMappingException(

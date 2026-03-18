@@ -4,11 +4,15 @@ import com.leandrosnazareth.flatgraph.annotation.ChildField;
 import com.leandrosnazareth.flatgraph.annotation.ParentField;
 
 import java.lang.reflect.Field;
+import java.time.*;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 
 /**
  * Responsible for extracting and CACHING metadata from DTO classes.
@@ -65,7 +69,8 @@ public final class MetadataExtractor {
             if (pf != null) {
                 Field domainField = resolveField(pf.target(), pf.field(), dtoClass, dtoField.getName());
                 boolean isId = "id".equals(pf.field());
-                parentMappings.add(new FieldMapping(dtoField, pf.target(), domainField, null, isId));
+                Function<Object, Object> conv = createConverter(domainField.getType());
+                parentMappings.add(new FieldMapping(dtoField, pf.target(), domainField, null, isId, conv));
 
                 if (rootClass == null) {
                     rootClass = pf.target();
@@ -83,7 +88,8 @@ public final class MetadataExtractor {
             if (cf != null) {
                 Field domainField = resolveField(cf.target(), cf.field(), dtoClass, dtoField.getName());
                 boolean isId = "id".equals(cf.field());
-                FieldMapping mapping = new FieldMapping(dtoField, cf.target(), domainField, cf.parent(), isId);
+                Function<Object, Object> conv = createConverter(domainField.getType());
+                FieldMapping mapping = new FieldMapping(dtoField, cf.target(), domainField, cf.parent(), isId, conv);
                 childMappings.add(mapping);
 
                 // Group by targetClass — computeIfAbsent preserves insertion order in LinkedHashMap
@@ -107,6 +113,109 @@ public final class MetadataExtractor {
             List.copyOf(childMappings),
             childMappingsByClass
         );
+    }
+
+    /**
+     * Creates a converter function that converts incoming DTO values (often String)
+     * into the target field type. The returned function must accept nulls.
+     */
+    private static Function<Object, Object> createConverter(Class<?> targetType) {
+        if (targetType == null) return v -> v;
+        // passthrough for assignable types
+        if (targetType == String.class) return v -> v;
+
+        if (targetType == Integer.class || targetType == int.class) {
+            return v -> {
+                if (v == null) return null;
+                if (v instanceof Number n) return n.intValue();
+                String s = v.toString().trim();
+                if (s.isEmpty()) return null;
+                return Integer.parseInt(s);
+            };
+        }
+        if (targetType == Long.class || targetType == long.class) {
+            return v -> {
+                if (v == null) return null;
+                if (v instanceof Number n) return n.longValue();
+                String s = v.toString().trim();
+                if (s.isEmpty()) return null;
+                return Long.parseLong(s);
+            };
+        }
+        if (targetType == Double.class || targetType == double.class) {
+            return v -> {
+                if (v == null) return null;
+                if (v instanceof Number n) return n.doubleValue();
+                String s = v.toString().trim();
+                if (s.isEmpty()) return null;
+                return Double.parseDouble(s);
+            };
+        }
+        if (targetType == Float.class || targetType == float.class) {
+            return v -> {
+                if (v == null) return null;
+                if (v instanceof Number n) return n.floatValue();
+                String s = v.toString().trim();
+                if (s.isEmpty()) return null;
+                return Float.parseFloat(s);
+            };
+        }
+        if (targetType == Boolean.class || targetType == boolean.class) {
+            return v -> {
+                if (v == null) return null;
+                if (v instanceof Boolean b) return b;
+                String s = v.toString().trim();
+                if (s.isEmpty()) return null;
+                return Boolean.parseBoolean(s);
+            };
+        }
+
+        if (targetType == java.time.LocalDate.class) {
+            DateTimeFormatter[] fmts = new DateTimeFormatter[] {
+                DateTimeFormatter.ISO_LOCAL_DATE,
+                DateTimeFormatter.ofPattern("dd/MM/yyyy"),
+                DateTimeFormatter.ofPattern("dd-MM-yyyy"),
+                DateTimeFormatter.ofPattern("yyyyMMdd")
+            };
+            return v -> {
+                if (v == null) return null;
+                if (v instanceof java.util.Date d) return d.toInstant().atZone(ZoneId.systemDefault()).toLocalDate();
+                String s = v.toString().trim();
+                if (s.isEmpty()) return null;
+                try {
+                    return java.time.OffsetDateTime.parse(s).toLocalDate();
+                } catch (DateTimeParseException ignored) {}
+                for (var fmt : fmts) {
+                    try { return java.time.LocalDate.parse(s, fmt); } catch (DateTimeParseException ignored) {}
+                }
+                throw new IllegalArgumentException("Cannot parse LocalDate: '" + s + "'");
+            };
+        }
+        if (targetType == java.time.LocalDateTime.class) {
+            DateTimeFormatter[] fmts = new DateTimeFormatter[] {
+                DateTimeFormatter.ISO_LOCAL_DATE_TIME,
+                DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss"),
+                DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"),
+                DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"),
+                DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+            };
+            return v -> {
+                if (v == null) return null;
+                if (v instanceof java.util.Date d) return d.toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime();
+                String s = v.toString().trim();
+                if (s.isEmpty()) return null;
+                try {
+                    return java.time.OffsetDateTime.parse(s).atZoneSameInstant(ZoneId.systemDefault()).toLocalDateTime();
+                } catch (DateTimeParseException ignored) {}
+                for (var fmt : fmts) {
+                    try { return java.time.LocalDateTime.parse(s, fmt); } catch (DateTimeParseException ignored) {}
+                }
+                throw new IllegalArgumentException("Cannot parse LocalDateTime: '" + s + "'");
+            };
+        }
+
+        // fallback: identity (will rely on Field#set to throw if incompatible)
+        return v -> v;
     }
 
     /**

@@ -1,7 +1,7 @@
 package com.leandrosnazareth.flatgraph.metadata;
 
 import java.lang.reflect.Field;
-
+import java.util.function.Function;
 /**
  * Immutable value object that represents a single DTO field mapping.
  *
@@ -24,7 +24,8 @@ public record FieldMapping(
         Class<?> targetClass,
         Field targetField,
         Class<?> parentClass,   // null for @ParentField mappings
-        boolean isId
+        boolean isId,
+        Function<Object, Object> converter
 ) {
 
     /**
@@ -34,5 +35,6 @@ public record FieldMapping(
     public FieldMapping {
         dtoField.setAccessible(true);
         targetField.setAccessible(true);
+        if (converter == null) throw new NullPointerException("converter");
     }
 }
