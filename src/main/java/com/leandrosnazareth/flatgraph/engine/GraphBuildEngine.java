@@ -1,9 +1,5 @@
 package com.leandrosnazareth.flatgraph.engine;
 
-import com.leandrosnazareth.flatgraph.metadata.ClassMetadata;
-import com.leandrosnazareth.flatgraph.metadata.FieldMapping;
-import com.leandrosnazareth.flatgraph.metadata.MetadataExtractor;
-
 import java.lang.reflect.Field;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
@@ -15,49 +11,73 @@ import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Collections;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import com.leandrosnazareth.flatgraph.metadata.ClassMetadata;
+import com.leandrosnazareth.flatgraph.metadata.FieldMapping;
+import com.leandrosnazareth.flatgraph.metadata.MetadataExtractor;
 
 /**
- * Core engine responsible for building an object graph from a flat list of DTOs.
+ * Core engine responsible for building an object graph from a flat list of
+ * DTOs.
  *
  * <h2>Algorithm overview (per DTO row)</h2>
  * <ol>
- *   <li>Extract the root ID. If {@code null}, skip the row entirely.</li>
- *   <li>Check if the root already exists in the identity map.
- *       <ul>
- *         <li>If <b>new</b>: instantiate and set all {@code @ParentField} values.</li>
- *         <li>If <b>existing</b>: reuse the cached instance — do NOT overwrite fields.</li>
- *       </ul>
- *   </li>
- *   <li>For each child class that appears in this row (in declaration order):
- *       <ul>
- *         <li>Extract the child ID. If {@code null}, skip this child entirely.</li>
- *         <li>If <b>new</b>: instantiate the child, set ALL its {@code @ChildField} values,
- *             then link it to its parent collection.</li>
- *         <li>If <b>existing</b>: reuse — do NOT overwrite fields, do NOT re-add to collection.</li>
- *       </ul>
- *   </li>
+ * <li>Extract the root ID. If {@code null}, skip the row entirely.</li>
+ * <li>Check if the root already exists in the identity map.
+ * <ul>
+ * <li>If <b>new</b>: instantiate and set all {@code @ParentField} values.</li>
+ * <li>If <b>existing</b>: reuse the cached instance — do NOT overwrite
+ * fields.</li>
+ * </ul>
+ * </li>
+ * <li>For each child class that appears in this row (in declaration order):
+ * <ul>
+ * <li>Extract the child ID. If {@code null}, skip this child entirely.</li>
+ * <li>If <b>new</b>: instantiate the child, set ALL its {@code @ChildField}
+ * values,
+ * then link it to its parent collection.</li>
+ * <li>If <b>existing</b>: reuse — do NOT overwrite fields, do NOT re-add to
+ * collection.</li>
+ * </ul>
+ * </li>
  * </ol>
  *
  * <h2>Why "set fields only on first encounter"?</h2>
- * <p>In a JOIN result, every row repeats the parent (and intermediate child) data.
- * Writing the same values repeatedly is harmless but wasteful. More importantly,
+ * <p>
+ * In a JOIN result, every row repeats the parent (and intermediate child) data.
+ * Writing the same values repeatedly is harmless but wasteful. More
+ * importantly,
  * doing so with a single-pass "always write" approach hides bugs where two rows
- * carry different values for the same ID — which would indicate a data inconsistency.
- * By writing only once we make such inconsistencies visible (the first value wins).
+ * carry different values for the same ID — which would indicate a data
+ * inconsistency.
+ * By writing only once we make such inconsistencies visible (the first value
+ * wins).
  *
  * <h2>Architectural decisions</h2>
  * <ul>
- *   <li>Identity maps are {@code LinkedHashMap} to preserve insertion order.</li>
- *   <li>Child maps are keyed by {@code ChildKey(targetClass, id)} to prevent
- *       collisions between different child types sharing the same numeric ID.</li>
- *   <li>Child fields are grouped by {@code targetClass} before processing so that
- *       all fields of a given child are set atomically in one pass.</li>
- *   <li>{@code collectionFieldCache} lives on the engine instance (one per DTO class)
- *       so it is computed at most once per {@code (parentClass, childClass)} pair
- *       across the entire application lifetime.</li>
- *   <li>All mutable graph state (rootMap, childMap) is local to {@link #build(List)},
- *       making the engine safe for concurrent invocations.</li>
+ * <li>Identity maps are {@code LinkedHashMap} to preserve insertion order.</li>
+ * <li>Child maps are keyed by {@code ChildKey(targetClass, id)} to prevent
+ * collisions between different child types sharing the same numeric ID.</li>
+ * <li>Child fields are grouped by {@code targetClass} before processing so that
+ * all fields of a given child are set atomically in one pass.</li>
+ * <li>{@code collectionFieldCache} lives on the engine instance (one per DTO
+ * class)
+ * so it is computed at most once per {@code (parentClass, childClass)} pair
+ * across the entire application lifetime.</li>
+ * <li>All mutable graph state (rootMap, childMap) is local to
+ * {@link #build(List)},
+ * making the engine safe for concurrent invocations.</li>
  * </ul>
  *
  * @param <D> DTO type
@@ -72,19 +92,21 @@ public final class GraphBuildEngine<D, R> {
 
     /** Candidate formatters tried in order when parsing a String into LocalDate. */
     private static final List<DateTimeFormatter> LOCAL_DATE_FORMATTERS = List.of(
-        DateTimeFormatter.ISO_LOCAL_DATE,             // 2024-03-05
-        DateTimeFormatter.ofPattern("dd/MM/yyyy"),    // 05/03/2024
-        DateTimeFormatter.ofPattern("dd-MM-yyyy"),    // 05-03-2024
-        DateTimeFormatter.ofPattern("yyyyMMdd")       // 20240305
+            DateTimeFormatter.ISO_LOCAL_DATE, // 2024-03-05
+            DateTimeFormatter.ofPattern("dd/MM/yyyy"), // 05/03/2024
+            DateTimeFormatter.ofPattern("dd-MM-yyyy"), // 05-03-2024
+            DateTimeFormatter.ofPattern("yyyyMMdd") // 20240305
     );
 
-    /** Candidate formatters tried in order when parsing a String into LocalDateTime. */
+    /**
+     * Candidate formatters tried in order when parsing a String into LocalDateTime.
+     */
     private static final List<DateTimeFormatter> LOCAL_DATE_TIME_FORMATTERS = List.of(
-        DateTimeFormatter.ISO_LOCAL_DATE_TIME,                    // 2024-03-05T08:43:31
-        DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss"),       // 05/03/2024 08:43:31
-        DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"),          // 05/03/2024 08:43
-        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"),       // 2024-03-05 08:43:31
-        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")           // 2024-03-05 08:43
+            DateTimeFormatter.ISO_LOCAL_DATE_TIME, // 2024-03-05T08:43:31
+            DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss"), // 05/03/2024 08:43:31
+            DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"), // 05/03/2024 08:43
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"), // 2024-03-05 08:43:31
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm") // 2024-03-05 08:43
     );
 
     /** Cache: "(parentClass#childClass)" → List field on parent. */
@@ -93,7 +115,9 @@ public final class GraphBuildEngine<D, R> {
     /** Cache: "(parentClass#childClass#single)" → single-object field on parent. */
     private final Map<String, Field> singleFieldCache = new HashMap<>();
 
-    /** Constructs the engine with the default {@link NullIdStrategy#SKIP} strategy. */
+    /**
+     * Constructs the engine with the default {@link NullIdStrategy#SKIP} strategy.
+     */
     public GraphBuildEngine(Class<D> dtoClass) {
         this(dtoClass, NullIdStrategy.SKIP);
     }
@@ -101,15 +125,16 @@ public final class GraphBuildEngine<D, R> {
     /**
      * Constructs the engine with an explicit null-ID strategy.
      *
-     * @param dtoClass       the DTO class carrying {@code @ParentField}/{@code @ChildField}
+     * @param dtoClass       the DTO class carrying
+     *                       {@code @ParentField}/{@code @ChildField}
      * @param nullIdStrategy how to handle rows where a child ID is {@code null}
      */
     @SuppressWarnings("unchecked")
     public GraphBuildEngine(Class<D> dtoClass, NullIdStrategy nullIdStrategy) {
-        this.dtoClass        = dtoClass;
-        this.nullIdStrategy  = nullIdStrategy;
-        this.metadata        = MetadataExtractor.extract(dtoClass);
-        this.rootClass       = (Class<R>) metadata.rootClass();
+        this.dtoClass = dtoClass;
+        this.nullIdStrategy = nullIdStrategy;
+        this.metadata = MetadataExtractor.extract(dtoClass);
+        this.rootClass = (Class<R>) metadata.rootClass();
     }
 
     // -------------------------------------------------------------------------
@@ -119,7 +144,8 @@ public final class GraphBuildEngine<D, R> {
     /**
      * Builds the object graph from the given flat DTO list.
      *
-     * @param rows flat DTO rows (e.g., result of a JOIN query); may be empty, never null
+     * @param rows flat DTO rows (e.g., result of a JOIN query); may be empty, never
+     *             null
      * @return ordered list of root objects with fully populated child collections
      */
     public List<R> build(List<D> rows) {
@@ -127,8 +153,8 @@ public final class GraphBuildEngine<D, R> {
             return Collections.emptyList();
         }
 
-        // root identity map  : rootId        → root instance   (insertion-ordered)
-        final Map<Object, R>      rootMap  = new LinkedHashMap<>();
+        // root identity map : rootId → root instance (insertion-ordered)
+        final Map<Object, R> rootMap = new LinkedHashMap<>();
         // child identity map : ChildKey(targetClass, id) → child instance
         final Map<ChildKey, Object> childMap = new LinkedHashMap<>();
         // attached children tracker: parentInstance -> (childClass -> set(childId))
@@ -146,13 +172,14 @@ public final class GraphBuildEngine<D, R> {
     // -------------------------------------------------------------------------
 
     private void processRow(D row,
-                             Map<Object, R> rootMap,
-                             Map<ChildKey, Object> childMap,
-                             Map<Object, Map<Class<?>, Set<Object>>> attachedChildren) {
+            Map<Object, R> rootMap,
+            Map<ChildKey, Object> childMap,
+            Map<Object, Map<Class<?>, Set<Object>>> attachedChildren) {
 
         // ── 1. Root ID ──────────────────────────────────────────────────────
         Object rootId = extractId(row, metadata.parentMappings());
-        if (rootId == null) return;
+        if (rootId == null)
+            return;
 
         // ── 2. Root instance — create + populate only on first encounter ────
         boolean rootIsNew = !rootMap.containsKey(rootId);
@@ -180,14 +207,16 @@ public final class GraphBuildEngine<D, R> {
             // b) Apply null-ID strategy
             if (childId == null) {
                 switch (nullIdStrategy) {
-                    case SKIP -> { continue; }
+                    case SKIP -> {
+                        continue;
+                    }
                     case THROW -> throw new GraphMappingException(
-                        "Null ID encountered for child class '" + childClass.getName()
-                        + "' while processing DTO '" + dtoClass.getName()
-                        + "'. Use NullIdStrategy.SKIP to silently ignore, "
-                        + "or NullIdStrategy.ALLOW_NULL_ID to allow null-keyed instances."
-                    );
-                    case ALLOW_NULL_ID -> { /* fall through — null is a valid key */ }
+                            "Null ID encountered for child class '" + childClass.getName()
+                                    + "' while processing DTO '" + dtoClass.getName()
+                                    + "'. Use NullIdStrategy.SKIP to silently ignore, "
+                                    + "or NullIdStrategy.ALLOW_NULL_ID to allow null-keyed instances.");
+                    case ALLOW_NULL_ID -> {
+                        /* fall through — null is a valid key */ }
                 }
             }
 
@@ -204,9 +233,9 @@ public final class GraphBuildEngine<D, R> {
             currentRowChildren.put(childClass, child);
 
             // d) Link to parent collection (only if the child was just created
-            //    OR if it was just seen for the first time under this specific parent)
+            // OR if it was just seen for the first time under this specific parent)
             Class<?> parentClass = metadata.childMappingsFor(childClass).get(0).parentClass();
-            Object   parentInstance = resolveParentInstance(parentClass, root, currentRowChildren);
+            Object parentInstance = resolveParentInstance(parentClass, root, currentRowChildren);
             if (parentInstance != null) {
                 addToCollection(parentInstance, childClass, child, childId, childIsNew, attachedChildren);
             }
@@ -221,7 +250,8 @@ public final class GraphBuildEngine<D, R> {
      * Reads the "id" field value from {@code row} using the first mapping whose
      * {@link FieldMapping#isId()} is {@code true} within {@code mappings}.
      *
-     * @return the ID value, or {@code null} if no id mapping exists or value is null
+     * @return the ID value, or {@code null} if no id mapping exists or value is
+     *         null
      */
     private Object extractId(D row, List<FieldMapping> mappings) {
         for (FieldMapping m : mappings) {
@@ -236,7 +266,8 @@ public final class GraphBuildEngine<D, R> {
      * Sets every domain field described by {@code mappings} on {@code target}
      * using the corresponding DTO field value from {@code row}.
      *
-     * <p>Called exactly once per (instance, row-group) — no redundant writes.
+     * <p>
+     * Called exactly once per (instance, row-group) — no redundant writes.
      */
     private void setFields(D row, Object target, List<FieldMapping> mappings) {
         for (FieldMapping m : mappings) {
@@ -251,15 +282,17 @@ public final class GraphBuildEngine<D, R> {
             converted = m.converter().apply(rawValue);
         } catch (RuntimeException e) {
             throw new GraphMappingException(
-                "Conversion failed for field '" + m.targetField().getName() + "' of "
-                + instance.getClass().getName() + ": " + e.getMessage(), e);
+                    "Conversion failed for field '" + m.targetField().getName() + "' of "
+                            + instance.getClass().getName() + ": " + e.getMessage(),
+                    e);
         }
         try {
             m.targetField().set(instance, converted);
         } catch (IllegalAccessException e) {
             throw new GraphMappingException(
-                "Cannot set field '" + m.targetField().getName() + "' on "
-                + instance.getClass().getName(), e);
+                    "Cannot set field '" + m.targetField().getName() + "' on "
+                            + instance.getClass().getName(),
+                    e);
         }
     }
 
@@ -268,8 +301,8 @@ public final class GraphBuildEngine<D, R> {
     // -------------------------------------------------------------------------
 
     private Object resolveParentInstance(Class<?> parentClass,
-                                          R root,
-                                          Map<Class<?>, Object> currentRowChildren) {
+            R root,
+            Map<Class<?>, Object> currentRowChildren) {
         if (parentClass.equals(rootClass)) {
             return root;
         }
@@ -280,13 +313,13 @@ public final class GraphBuildEngine<D, R> {
     // helper: add child to the List<?> collection field on parent
     // -------------------------------------------------------------------------
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
+    @SuppressWarnings({ "unchecked", "rawtypes" })
     private void addToCollection(Object parent,
-                                 Class<?> childClass,
-                                 Object child,
-                                 Object childId,
-                                 boolean childIsNew,
-                                 Map<Object, Map<Class<?>, Set<Object>>> attachedChildren) {
+            Class<?> childClass,
+            Object child,
+            Object childId,
+            boolean childIsNew,
+            Map<Object, Map<Class<?>, Set<Object>>> attachedChildren) {
         Field collectionField = resolveCollectionField(parent.getClass(), childClass);
         if (collectionField != null) {
             try {
@@ -301,8 +334,8 @@ public final class GraphBuildEngine<D, R> {
                     list.add(child);
                     // record attachment
                     attachedChildren.computeIfAbsent(parent, p -> new HashMap<>())
-                                     .computeIfAbsent(childClass, c -> new HashSet<>())
-                                     .add(childId);
+                            .computeIfAbsent(childClass, c -> new HashSet<>())
+                            .add(childId);
                 } else {
                     // child existed before; check if already attached to THIS parent
                     Map<Class<?>, Set<Object>> map = attachedChildren.computeIfAbsent(parent, p -> new HashMap<>());
@@ -313,8 +346,9 @@ public final class GraphBuildEngine<D, R> {
                 }
             } catch (IllegalAccessException e) {
                 throw new GraphMappingException(
-                    "Cannot access collection field '" + collectionField.getName()
-                    + "' on " + parent.getClass().getName(), e);
+                        "Cannot access collection field '" + collectionField.getName()
+                                + "' on " + parent.getClass().getName(),
+                        e);
             }
             return;
         }
@@ -326,20 +360,22 @@ public final class GraphBuildEngine<D, R> {
                 if (singleField.get(parent) == null) {
                     singleField.set(parent, child);
                     attachedChildren.computeIfAbsent(parent, p -> new HashMap<>())
-                                     .computeIfAbsent(childClass, c -> new HashSet<>())
-                                     .add(childId);
+                            .computeIfAbsent(childClass, c -> new HashSet<>())
+                            .add(childId);
                 }
             } catch (IllegalAccessException e) {
                 throw new GraphMappingException(
-                    "Cannot access single field '" + singleField.getName()
-                    + "' on " + parent.getClass().getName(), e);
+                        "Cannot access single field '" + singleField.getName()
+                                + "' on " + parent.getClass().getName(),
+                        e);
             }
         }
     }
 
     /**
      * Resolves and caches the {@code List<childClass>} field on {@code parentClass}
-     * by scanning the entire class hierarchy and inspecting generic type parameters.
+     * by scanning the entire class hierarchy and inspecting generic type
+     * parameters.
      */
     private Field resolveCollectionField(Class<?> parentClass, Class<?> childClass) {
         String cacheKey = parentClass.getName() + "#" + childClass.getName();
@@ -359,7 +395,10 @@ public final class GraphBuildEngine<D, R> {
         });
     }
 
-    /** Returns {@code true} if the sole generic type argument of {@code listField} equals {@code expected}. */
+    /**
+     * Returns {@code true} if the sole generic type argument of {@code listField}
+     * equals {@code expected}.
+     */
     private boolean genericTypeMatches(Field listField, Class<?> expected) {
         Type generic = listField.getGenericType();
         if (generic instanceof ParameterizedType pt) {
@@ -370,7 +409,8 @@ public final class GraphBuildEngine<D, R> {
     }
 
     /**
-     * Resolves and caches a single-object field of type {@code childClass} on {@code parentClass}.
+     * Resolves and caches a single-object field of type {@code childClass} on
+     * {@code parentClass}.
      * Used as fallback when no {@code List<childClass>} field exists.
      */
     private Field resolveSingleField(Class<?> parentClass, Class<?> childClass) {
@@ -399,7 +439,7 @@ public final class GraphBuildEngine<D, R> {
             return field.get(row);
         } catch (IllegalAccessException e) {
             throw new GraphMappingException(
-                "Cannot read DTO field '" + field.getName() + "' on " + dtoClass.getName(), e);
+                    "Cannot read DTO field '" + field.getName() + "' on " + dtoClass.getName(), e);
         }
     }
 
@@ -408,39 +448,51 @@ public final class GraphBuildEngine<D, R> {
             field.set(instance, convertIfNeeded(value, field.getType()));
         } catch (IllegalAccessException e) {
             throw new GraphMappingException(
-                "Cannot set field '" + field.getName() + "' on "
-                + instance.getClass().getName(), e);
+                    "Cannot set field '" + field.getName() + "' on "
+                            + instance.getClass().getName(),
+                    e);
         }
     }
 
     /**
      * Converts {@code value} to {@code targetType}. Supported conversions:
      * <ul>
-     *   <li>{@link Calendar} → {@link LocalDate} / {@link LocalDateTime} / {@link Date}</li>
-     *   <li>{@link Date}     → {@link LocalDate} / {@link LocalDateTime}</li>
-     *   <li>{@link String}   → {@link LocalDate}  (ISO, dd/MM/yyyy, dd-MM-yyyy, yyyyMMdd)</li>
-     *   <li>{@link String}   → {@link LocalDateTime} (ISO, dd/MM/yyyy HH:mm:ss, yyyy-MM-dd HH:mm:ss, ...)</li>
-     *   <li>{@link String}   → numeric types: {@code int}, {@code long}, {@code double}, {@code float},
-     *                          {@code short}, {@code byte}, {@code boolean},
-     *                          {@link Integer}, {@link Long}, {@link Double}, {@link Float},
-     *                          {@link Short}, {@link Byte}, {@link Boolean},
-     *                          {@link BigDecimal}, {@link BigInteger}</li>
+     * <li>{@link Calendar} → {@link LocalDate} / {@link LocalDateTime} /
+     * {@link Date}</li>
+     * <li>{@link Date} → {@link LocalDate} / {@link LocalDateTime}</li>
+     * <li>{@link String} → {@link LocalDate} (ISO, dd/MM/yyyy, dd-MM-yyyy,
+     * yyyyMMdd)</li>
+     * <li>{@link String} → {@link LocalDateTime} (ISO, dd/MM/yyyy HH:mm:ss,
+     * yyyy-MM-dd HH:mm:ss, ...)</li>
+     * <li>{@link String} → numeric types: {@code int}, {@code long},
+     * {@code double}, {@code float},
+     * {@code short}, {@code byte}, {@code boolean},
+     * {@link Integer}, {@link Long}, {@link Double}, {@link Float},
+     * {@link Short}, {@link Byte}, {@link Boolean},
+     * {@link BigDecimal}, {@link BigInteger}</li>
      * </ul>
      */
     private Object convertIfNeeded(Object value, Class<?> targetType) {
-        if (value == null) return null;
-        if (targetType.isAssignableFrom(value.getClass())) return value;
+        if (value == null)
+            return null;
+        if (targetType.isAssignableFrom(value.getClass()))
+            return value;
 
         if (value instanceof Calendar cal) {
             ZoneId zone = cal.getTimeZone().toZoneId();
-            if (targetType == LocalDate.class)     return cal.toInstant().atZone(zone).toLocalDate();
-            if (targetType == LocalDateTime.class) return cal.toInstant().atZone(zone).toLocalDateTime();
-            if (targetType == Date.class)          return cal.getTime();
+            if (targetType == LocalDate.class)
+                return cal.toInstant().atZone(zone).toLocalDate();
+            if (targetType == LocalDateTime.class)
+                return cal.toInstant().atZone(zone).toLocalDateTime();
+            if (targetType == Date.class)
+                return cal.getTime();
         }
 
         if (value instanceof Date date) {
-            if (targetType == LocalDate.class)     return date.toInstant().atZone(ZoneId.systemDefault()).toLocalDate();
-            if (targetType == LocalDateTime.class) return date.toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime();
+            if (targetType == LocalDate.class)
+                return date.toInstant().atZone(ZoneId.systemDefault()).toLocalDate();
+            if (targetType == LocalDateTime.class)
+                return date.toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime();
         }
 
         if (value instanceof String s && !s.isBlank()) {
@@ -449,34 +501,58 @@ public final class GraphBuildEngine<D, R> {
                 // tenta parsear como OffsetDateTime e extrair a data local
                 try {
                     return OffsetDateTime.parse(s).toLocalDate();
-                } catch (DateTimeParseException ignored) {}
+                } catch (DateTimeParseException ignored) {
+                }
                 for (DateTimeFormatter fmt : LOCAL_DATE_FORMATTERS) {
-                    try { return LocalDate.parse(s, fmt); } catch (DateTimeParseException ignored) {}
+                    try {
+                        return LocalDate.parse(s, fmt);
+                    } catch (DateTimeParseException ignored) {
+                    }
                 }
             }
             if (targetType == LocalDateTime.class) {
-                // tenta parsear como OffsetDateTime e converter para LocalDateTime no timezone do sistema
+                // tenta parsear como OffsetDateTime e converter para LocalDateTime no timezone
+                // do sistema
                 try {
                     return OffsetDateTime.parse(s).atZoneSameInstant(ZoneId.systemDefault()).toLocalDateTime();
-                } catch (DateTimeParseException ignored) {}
+                } catch (DateTimeParseException ignored) {
+                }
                 for (DateTimeFormatter fmt : LOCAL_DATE_TIME_FORMATTERS) {
-                    try { return LocalDateTime.parse(s, fmt); } catch (DateTimeParseException ignored) {}
+                    try {
+                        return LocalDateTime.parse(s, fmt);
+                    } catch (DateTimeParseException ignored) {
+                    }
                 }
             }
             // Numeric / boolean
             try {
-                if (targetType == Integer.class   || targetType == int.class)     return Integer.parseInt(s.trim());
-                if (targetType == Long.class      || targetType == long.class)    return Long.parseLong(s.trim());
-                if (targetType == Double.class    || targetType == double.class)  return Double.parseDouble(s.trim());
-                if (targetType == Float.class     || targetType == float.class)   return Float.parseFloat(s.trim());
-                if (targetType == Short.class     || targetType == short.class)   return Short.parseShort(s.trim());
-                if (targetType == Byte.class      || targetType == byte.class)    return Byte.parseByte(s.trim());
-                if (targetType == Boolean.class   || targetType == boolean.class) return Boolean.parseBoolean(s.trim());
-                if (targetType == BigDecimal.class) return new BigDecimal(s.trim());
-                if (targetType == BigInteger.class) return new BigInteger(s.trim());
+                if (targetType == Integer.class || targetType == int.class)
+                    return Integer.parseInt(s.trim());
+                if (targetType == Long.class || targetType == long.class)
+                    return Long.parseLong(s.trim());
+                if (targetType == Double.class || targetType == double.class) {
+                    String normalized = s.replace(".", "").replace(",", ".");
+                    return Double.parseDouble(normalized);
+                }
+                if (targetType == Float.class || targetType == float.class) {
+                    String normalized = s.replace(".", "").replace(",", ".");
+                    return Float.parseFloat(normalized);
+                }
+                if (targetType == Short.class || targetType == short.class)
+                    return Short.parseShort(s.trim());
+                if (targetType == Byte.class || targetType == byte.class)
+                    return Byte.parseByte(s.trim());
+                if (targetType == Boolean.class || targetType == boolean.class)
+                    return Boolean.parseBoolean(s.trim());
+                if (targetType == BigDecimal.class) {
+                    String normalized = s.replace(".", "").replace(",", ".");
+                    return new BigDecimal(normalized);
+                }
+                if (targetType == BigInteger.class)
+                    return new BigInteger(s.trim());
             } catch (NumberFormatException e) {
                 throw new GraphMappingException(
-                    "Cannot convert String value '" + s + "' to " + targetType.getSimpleName(), e);
+                        "Cannot convert String value '" + s + "' to " + targetType.getSimpleName(), e);
             }
         }
 
@@ -490,8 +566,9 @@ public final class GraphBuildEngine<D, R> {
             return ctor.newInstance();
         } catch (ReflectiveOperationException e) {
             throw new GraphMappingException(
-                "Cannot instantiate '" + clazz.getName()
-                + "'. Ensure it has a no-arg constructor (can be private).", e);
+                    "Cannot instantiate '" + clazz.getName()
+                            + "'. Ensure it has a no-arg constructor (can be private).",
+                    e);
         }
     }
 
@@ -503,5 +580,6 @@ public final class GraphBuildEngine<D, R> {
      * Composite key for the child identity map.
      * Record gives correct {@code equals}/{@code hashCode} automatically.
      */
-    private record ChildKey(Class<?> targetClass, Object id) {}
+    private record ChildKey(Class<?> targetClass, Object id) {
+    }
 }
