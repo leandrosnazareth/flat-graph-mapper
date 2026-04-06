@@ -122,29 +122,6 @@
             </plugin>
 
             <!-- GPG signing -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-gpg-plugin</artifactId>
-                <version>3.2.1</version>
-                <executions>
-                    <execution>
-                        <id>sign-artifacts</id>
-                        <phase>verify</phase>
-                        <goals>
-                            <goal>sign</goal>
-                        </goals>
-                        <configuration>
-                            <gpgArguments>
-                                <arg>--batch</arg>
-                                <arg>--pinentry-mode</arg>
-                                <arg>loopback</arg>
-                            </gpgArguments>
-                            <useAgent>false</useAgent>
-                            <passphraseServerId>gpg</passphraseServerId>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
 
             <!-- Maven Central publishing -->
             <plugin>

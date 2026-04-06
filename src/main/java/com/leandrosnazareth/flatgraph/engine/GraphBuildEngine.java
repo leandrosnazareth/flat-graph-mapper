@@ -279,7 +279,8 @@ public final class GraphBuildEngine<D, R> {
     private void setFieldFromMapping(Object instance, FieldMapping m, Object rawValue) {
         Object converted;
         try {
-            converted = m.converter().apply(rawValue);
+            // Usa convertIfNeeded para garantir conversão correta
+            converted = convertIfNeeded(rawValue, m.targetField().getType());
         } catch (RuntimeException e) {
             throw new GraphMappingException(
                     "Conversion failed for field '" + m.targetField().getName() + "' of "
@@ -443,16 +444,7 @@ public final class GraphBuildEngine<D, R> {
         }
     }
 
-    private void setField(Object instance, Field field, Object value) {
-        try {
-            field.set(instance, convertIfNeeded(value, field.getType()));
-        } catch (IllegalAccessException e) {
-            throw new GraphMappingException(
-                    "Cannot set field '" + field.getName() + "' on "
-                            + instance.getClass().getName(),
-                    e);
-        }
-    }
+
 
     /**
      * Converts {@code value} to {@code targetType}. Supported conversions:
@@ -545,7 +537,14 @@ public final class GraphBuildEngine<D, R> {
                 if (targetType == Boolean.class || targetType == boolean.class)
                     return Boolean.parseBoolean(s.trim());
                 if (targetType == BigDecimal.class) {
-                    String normalized = s.replace(".", "").replace(",", ".");
+                    String normalized;
+                    if (s.contains(",")) {
+                        // Formato brasileiro: 1.234,56 -> 1234.56
+                        normalized = s.replace(".", "").replace(",", ".");
+                    } else {
+                        // Formato internacional: 1234.56
+                        normalized = s;
+                    }
                     return new BigDecimal(normalized);
                 }
                 if (targetType == BigInteger.class)
@@ -553,6 +552,15 @@ public final class GraphBuildEngine<D, R> {
             } catch (NumberFormatException e) {
                 throw new GraphMappingException(
                         "Cannot convert String value '" + s + "' to " + targetType.getSimpleName(), e);
+            }
+            // Enum
+            if (targetType.isEnum()) {
+                try {
+                    return Enum.valueOf((Class<Enum>) targetType.asSubclass(Enum.class), s.trim());
+                } catch (IllegalArgumentException e) {
+                    throw new GraphMappingException(
+                        "Cannot convert String value '" + s + "' to enum " + targetType.getSimpleName(), e);
+                }
             }
         }
 
